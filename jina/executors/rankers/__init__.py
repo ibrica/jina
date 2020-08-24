@@ -1,7 +1,7 @@
 __copyright__ = "Copyright (c) 2020 Jina AI Limited. All rights reserved."
 __license__ = "Apache-2.0"
 
-from typing import Dict
+from typing import Dict, Tuple, List
 
 import numpy as np
 
@@ -11,8 +11,40 @@ from .. import BaseExecutor
 class BaseRanker(BaseExecutor):
     """The base class for a `Ranker`"""
 
-    def score(self, *args, **kwargs):
+    def sort(self, scores: List[Tuple[int, int]]):
+        """
+        Sort a list of (``doc_id``, ``score``) tuples by the ``score``.
+        :return: an `np.ndarray` in the shape of [N x 2], where `N` in the length of the input list.
+        """
+        scores = np.array(scores, dtype=np.float64)
+        scores = scores[scores[:, -1].argsort()[::-1]]
+        return scores
+
+    def score(self, matches: 'np.ndarray', query_meta: Dict, match_meta: Dict) -> List[Tuple[int, int]]:
+        """
+        Score every document inside matches.
+        :return: List of Tuples (`match_id`, `score`).
+        """
         raise NotImplementedError
+
+    def rank(self, matches: 'np.ndarray', query_chunk_meta: Dict, match_chunk_meta: Dict) -> 'np.ndarray':
+        """Rank the match documents. Some score functions may leverage the
+        meta information of the query, hence the meta info of the query chunks and matched chunks are given
+        as arguments.
+
+        :param matches: a [N x 3] numpy ``ndarray``, column-wise:
+                - ``matches[:, 0]``: ``doc_id`` of the matched docs, integer
+                - ``matches[:, 1]``: ``doc_id`` of the query docs, integer
+                - ``matches[:, 2]``: distance/metric/score between the query and matched docs, float
+        :param query_chunk_meta: the meta information of the query chunks, where the key is query chunks' ``chunk_id``,
+            the value is extracted by the ``required_keys``.
+        :param match_chunk_meta: the meta information of the matched chunks, where the key is matched chunks'
+            ``chunk_id``, the value is extracted by the ``required_keys``.
+        :return: a [N x 2] numpy ``ndarray``, where the first column is the matched documents' ``doc_id`` (integer)
+                the second column is the score/distance/metric between the matched doc and the query doc (float).
+        """
+        scores = self.score(matches, query_chunk_meta, match_chunk_meta)
+        return self.sort(scores)
 
 
 class Chunk2DocRanker(BaseRanker):
@@ -64,7 +96,7 @@ class Chunk2DocRanker(BaseRanker):
             r.append((_doc_id, _doc_score))
         return self.sort_doc_by_score(r)
 
-    def group_by_doc_id(self, match_idx):
+    def group_by_doc_id(self, match_idx: 'np.ndarray'):
         """
         Group the ``match_idx`` by ``doc_id``
         :return: an iterator over the groups
@@ -72,14 +104,14 @@ class Chunk2DocRanker(BaseRanker):
         return self._group_by(match_idx, self.col_doc_id)
 
     @staticmethod
-    def _group_by(match_idx, col):
+    def _group_by(match_idx: 'np.ndarray', col: int):
         # sort by ``col``
         _sorted_m = match_idx[match_idx[:, col].argsort()]
         _, _doc_counts = np.unique(_sorted_m[:, col], return_counts=True)
         # group by ``col``
         return np.split(_sorted_m, np.cumsum(_doc_counts))[:-1]
 
-    def _get_score(self, match_idx, query_chunk_meta, match_chunk_meta, *args, **kwargs):
+    def _get_score(self, match_idx: 'np.ndarray', query_chunk_meta: Dict, match_chunk_meta: Dict, *args, **kwargs):
         raise NotImplementedError
 
     @staticmethod
